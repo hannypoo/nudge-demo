@@ -67,18 +67,15 @@ export function useChat() {
         });
         setSuggestions(response.suggestions || []);
         qc.invalidateQueries({ queryKey: ['chat_messages'] });
-        setIsLoading(false);
 
-        // Fire off demo actions in background — don't block the return
-        // This lets speech start immediately while the schedule updates
+        // Execute demo actions and wait for completion before returning
         if (response.actions && response.actions.length > 0) {
-          restoreDemoSchedule(profileId, getToday()).then((freshBlocks) =>
-            executeDemoActions(response.actions!, freshBlocks, profileId, getToday()).then(() =>
-              qc.invalidateQueries({ queryKey: ['schedule_blocks'] })
-            )
-          );
+          const freshBlocks = await restoreDemoSchedule(profileId, getToday());
+          await executeDemoActions(response.actions, freshBlocks, profileId, getToday());
+          qc.invalidateQueries({ queryKey: ['schedule_blocks'] });
         }
 
+        setIsLoading(false);
         return response;
       } else {
         // Fall through to real AI edge function

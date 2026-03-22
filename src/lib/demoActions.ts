@@ -342,29 +342,48 @@ export async function executeDemoActions(
       const { error: insertErr } = await supabase.from('schedule_blocks').insert(newBlocks);
       if (insertErr) console.error('Failed to insert grocery blocks:', insertErr);
 
-      // Shift non-fixed, non-evening blocks after the original drive home down by shiftAmount
-      // Fixed blocks, travel, and everything in the evening prep zone (17:00+) stays put
+      // Shift blocks down and compress to fit before dinner (17:00)
       if (shiftAmount > 0) {
         const eveningCutoff = 17 * 60;
-        const blocksToShift = blocks.filter((b) => {
-          if (origDriveHome && b.id === origDriveHome.id) return false; // already deleted
-          if (b.is_fixed || b.is_travel) return false; // never move fixed/travel blocks
-          const start = parseTimeToMinutes(b.start_time);
-          if (start >= eveningCutoff) return false; // don't touch evening prep zone
-          return start >= dentistEnd + origDriveHomeDuration;
-        });
+        const blocksToShift = blocks
+          .filter((b) => {
+            if (origDriveHome && b.id === origDriveHome.id) return false;
+            if (b.is_fixed || b.is_travel) return false;
+            const start = parseTimeToMinutes(b.start_time);
+            if (start >= eveningCutoff) return false;
+            return start >= dentistEnd + origDriveHomeDuration;
+          })
+          .sort((a, b) => parseTimeToMinutes(a.start_time) - parseTimeToMinutes(b.start_time));
+
+        // Calculate total time available vs total time needed
+        const availableEnd = eveningCutoff;
+        const shiftedStart = parseTimeToMinutes(blocksToShift[0]?.start_time ?? '11:35') + shiftAmount;
+        const availableMinutes = availableEnd - shiftedStart;
+        const totalOriginalMinutes = blocksToShift.reduce((sum, b) => sum + b.duration_minutes, 0);
+
+        // If blocks fit without compression, just shift. Otherwise compress proportionally.
+        const ratio = totalOriginalMinutes <= availableMinutes
+          ? 1
+          : availableMinutes / totalOriginalMinutes;
+
+        let cursor = shiftedStart;
 
         for (const block of blocksToShift) {
-          const oldStart = parseTimeToMinutes(block.start_time);
-          const oldEnd = parseTimeToMinutes(block.end_time);
-          const { error: shiftErr } = await supabase
+          const newDuration = ratio < 1
+            ? Math.max(5, Math.round(block.duration_minutes * ratio))
+            : block.duration_minutes;
+          const newStart = cursor;
+          const newEnd = cursor + newDuration;
+
+          await supabase
             .from('schedule_blocks')
             .update({
-              start_time: minutesToTime(oldStart + shiftAmount),
-              end_time: minutesToTime(oldEnd + shiftAmount),
+              start_time: minutesToTime(newStart),
+              end_time: minutesToTime(newEnd),
+              duration_minutes: newDuration,
             })
             .eq('id', block.id);
-          if (shiftErr) console.error('Failed to shift block:', shiftErr);
+          cursor = newEnd;
         }
       }
 

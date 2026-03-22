@@ -2,9 +2,11 @@ import type { ChatResponse } from '../types';
 
 // Tracks multi-turn demo conversations (e.g., grocery follow-up)
 let pendingScenario: string | null = null;
+let pendingStore: string | null = null;
 
 export function resetDemoConversation() {
   pendingScenario = null;
+  pendingStore = null;
 }
 
 /**
@@ -17,13 +19,91 @@ export function getDemoResponse(
 ): ChatResponse | null {
   const msg = message.toLowerCase().trim();
 
-  // ─── Follow-up to grocery scenario ────────────────────────────
-  if (pendingScenario === 'grocery') {
-    pendingScenario = null;
+  // ─── Grocery: user asks "what changed?" after apply ──
+  if (pendingScenario === 'grocery_changes') {
+    const store = pendingStore;
+    const isCostco = store === 'Costco';
 
-    if (msg.includes('quick') || msg.includes('safeway') || msg.includes('small')) {
+    if (msg.includes('what') || msg.includes('change') || msg.includes('show') || msg.includes('detail')) {
+      pendingScenario = 'grocery_adjust';
+      pendingStore = null;
       return {
-        message: "Got it — quick Safeway run! I've rerouted you from the dentist straight to Safeway, then home. Everything else shifted down. In and out! 🛒",
+        message: isCostco
+          ? "Here's what I changed:\n\n• **Added** Drive to Costco → 1hr shopping → Drive home\n• **Shifted** all afternoon blocks down\n• **Compressed** study, kitchen, group project, call mom, beardies, and budget to fit before dinner\n• **Evening stays untouched** — dinner, shower, class all in place"
+          : "Here's what I changed:\n\n• **Added** Drive to Safeway → 30min shopping → Drive home\n• **Shifted** all afternoon blocks down\n• **Slightly compressed** a few blocks to fit before dinner\n• **Evening stays untouched** — dinner, shower, class all in place",
+        suggestions: [
+          { id: 's1', label: 'Looks good', action: { type: 'send_message', message: 'Looks good' } },
+          { id: 's2', label: 'Actually, make it a long trip', action: { type: 'send_message', message: 'Actually make it a big Costco run' } },
+        ],
+      };
+    }
+
+    // "Looks good" or anything else — done
+    pendingScenario = 'grocery_adjust';
+    pendingStore = null;
+    return {
+      message: "You're all set! Your schedule is updated. 👍",
+      suggestions: [
+        { id: 's1', label: 'Add something else', action: { type: 'send_message', message: 'I need to add another task' } },
+        { id: 's2', label: "What's next?", action: { type: 'send_message', message: "What's my next task?" } },
+      ],
+    };
+  }
+
+  // ─── Grocery: user confirms "you handle it" → show changes and apply ──
+  if (pendingScenario === 'grocery_confirm') {
+    const store = pendingStore;
+    pendingStore = null;
+
+    if (msg.includes('you') || msg.includes('handle') || msg.includes('go ahead') || msg.includes('sure') || msg.includes('yeah') || msg.includes('yes') || msg.includes('do it') || msg.includes('sounds good') || msg.includes('ok')) {
+      const isCostco = store === 'Costco';
+      const shopMin = isCostco ? 40 : 30;
+      const shiftMin = isCostco ? 65 : 35;
+
+      pendingScenario = 'grocery_changes';
+      pendingStore = store;
+      return {
+        message: isCostco
+          ? "On it! Adding your Costco trip after the dentist and compressing your afternoon to fit. Your evening stays locked. 📋"
+          : "On it! Adding your Safeway stop after the dentist and adjusting your afternoon. Your evening stays locked. 🛒",
+        actions: [{ type: 'grocery_insert', data: { store, shopDuration: shopMin, driveTo: 10, driveHome: 15 } }],
+        suggestions: [
+          { id: 's1', label: 'What changed?', action: { type: 'send_message', message: 'What changed?' } },
+          { id: 's2', label: 'Looks good', action: { type: 'send_message', message: 'Looks good' } },
+        ],
+      };
+    }
+
+    // User wants to specify preferences — for now, treat as "you handle it"
+    pendingScenario = 'grocery_adjust';
+    return {
+      message: `On it! Adding your ${store} trip after the dentist and adjusting your afternoon. Your evening stays locked.`,
+      actions: [{ type: 'grocery_insert', data: { store: store || 'Grocery store', shopDuration: store === 'Costco' ? 40 : 30, driveTo: 10, driveHome: 15 } }],
+      suggestions: [
+        { id: 's1', label: 'Add something else', action: { type: 'send_message', message: 'I need to add another task' } },
+        { id: 's2', label: "What's next?", action: { type: 'send_message', message: "What's my next task?" } },
+      ],
+    };
+  }
+
+  // ─── Grocery correction — user changed their mind after applying ──
+  if (pendingScenario === 'grocery_adjust') {
+    if (msg.includes('big') || msg.includes('costco') || msg.includes('large') || msg.includes('long') || msg.includes('haul')) {
+      pendingScenario = 'grocery_adjust';
+      return {
+        message: "Switching to a big Costco run! Reshuffling everything to make room. 📋",
+        actions: [{ type: 'grocery_insert', data: { store: 'Costco', shopDuration: 60, driveTo: 10, driveHome: 15 } }],
+        suggestions: [
+          { id: 's1', label: 'Add something else', action: { type: 'send_message', message: 'I need to add another task' } },
+          { id: 's2', label: "What's next?", action: { type: 'send_message', message: "What's my next task?" } },
+        ],
+      };
+    }
+
+    if (msg.includes('quick') || msg.includes('safeway') || msg.includes('small') || msg.includes('short') || msg.includes('fast')) {
+      pendingScenario = 'grocery_adjust';
+      return {
+        message: "Scaled it back to a quick Safeway run. Everything shifted back — you've got more time now! 🛒",
         actions: [{ type: 'grocery_insert', data: { store: 'Safeway', shopDuration: 30, driveTo: 10, driveHome: 15 } }],
         suggestions: [
           { id: 's1', label: 'Add something else', action: { type: 'send_message', message: 'I need to add another task' } },
@@ -32,24 +112,44 @@ export function getDemoResponse(
       };
     }
 
-    if (msg.includes('big') || msg.includes('costco') || msg.includes('large')) {
+    // Didn't match a grocery correction — clear and fall through
+    pendingScenario = null;
+  }
+
+  // ─── Follow-up to grocery scenario — pick store, then ask for confirmation ──
+  if (pendingScenario === 'grocery') {
+    if (msg.includes('quick') || msg.includes('safeway') || msg.includes('small') || msg.includes('short') || msg.includes('fast')) {
+      pendingScenario = 'grocery_confirm';
+      pendingStore = 'Safeway';
       return {
-        message: "Big Costco run it is! I've rerouted you from the dentist straight to Costco, then home. Everything else shifted down to make room. Don't forget your list! 📋",
-        actions: [{ type: 'grocery_insert', data: { store: 'Costco', shopDuration: 60, driveTo: 15, driveHome: 20 } }],
+        message: "Quick Safeway run! That adds about 40 minutes to your day. Want me to handle it, or do you have specific changes in mind?",
         suggestions: [
-          { id: 's1', label: 'Add something else', action: { type: 'send_message', message: 'I need to add another task' } },
-          { id: 's2', label: "What's next?", action: { type: 'send_message', message: "What's my next task?" } },
+          { id: 'c1', label: 'You handle it', action: { type: 'send_message', message: 'You handle it' } },
+          { id: 'c2', label: 'I have preferences', action: { type: 'send_message', message: 'I have preferences' } },
         ],
       };
     }
 
-    // Unmatched grocery follow-up — default to quick trip
+    if (msg.includes('big') || msg.includes('costco') || msg.includes('large') || msg.includes('long') || msg.includes('haul')) {
+      pendingScenario = 'grocery_confirm';
+      pendingStore = 'Costco';
+      return {
+        message: "Big Costco run! That adds about 70 minutes to your day. Want me to handle it, or do you have specific changes in mind?",
+        suggestions: [
+          { id: 'c1', label: 'You handle it', action: { type: 'send_message', message: 'You handle it' } },
+          { id: 'c2', label: 'I have preferences', action: { type: 'send_message', message: 'I have preferences' } },
+        ],
+      };
+    }
+
+    // Unmatched — default to quick trip
+    pendingScenario = 'grocery_confirm';
+    pendingStore = 'Grocery store';
     return {
-      message: "I'll reroute you from the dentist to the store, then home. Everything else shifted down! 🛒",
-      actions: [{ type: 'grocery_insert', data: { store: 'Grocery store', shopDuration: 30, driveTo: 10, driveHome: 15 } }],
+      message: "Got it! That adds about 40 minutes to your day. Want me to handle it, or do you have specific changes in mind?",
       suggestions: [
-        { id: 's1', label: 'Add something else', action: { type: 'send_message', message: 'I need to add another task' } },
-        { id: 's2', label: "What's next?", action: { type: 'send_message', message: "What's my next task?" } },
+        { id: 'c1', label: 'You handle it', action: { type: 'send_message', message: 'You handle it' } },
+        { id: 'c2', label: 'I have preferences', action: { type: 'send_message', message: 'I have preferences' } },
       ],
     };
   }
